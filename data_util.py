@@ -8,6 +8,7 @@ import json
 import nltk
 import argparse
 import fnmatch
+import random
 
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 
@@ -30,7 +31,7 @@ def to_device(L, device):
     else:
         ret = []
         for item in L:
-            ret.append(to_device(item))
+            ret.append(to_device(item, device))
         return ret
 
 class ClothSample(object):
@@ -64,7 +65,7 @@ class ClothSample(object):
         
 class Preprocessor(object):
     def __init__(self, args, device='cpu'):
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.tokenizer = BertTokenizer.from_pretrained(args.bert_model)
         self.data_dir = args.data_dir
         file_list = get_json_file_list(args.data_dir)
         self.data = []
@@ -121,12 +122,13 @@ class Preprocessor(object):
         return ClothSample(data, self.tokenizer)
 
 class Loader(object):
-    def __init__(self, args, device='cpu'):
-        self.tokenizer = BertTokenizer.from_pretrained(args.bert_model)
-        self.data_dir = args.data_dir
+    def __init__(self, data_dir, data_file, cache_size, batch_size, device='cpu'):
+        #self.tokenizer = BertTokenizer.from_pretrained(args.bert_model)
+        self.data_dir = os.path.join(data_dir, data_file)
+        print('loading {}'.format(self.data_dir))
         self.data = torch.load(self.data_dir)
-        self.cache_size = args.cache_size
-        self.batch_size = args.batch_size
+        self.cache_size = cache_size
+        self.batch_size = batch_size
         self.data_num = len(self.data)
         self.device = device
     
@@ -136,18 +138,19 @@ class Loader(object):
         options = []
         options_mask = []
         answers = []
-        question_ids = []
+        question_id = []
+        question_pos = []
         
-        max_ariticle_length = 0
+        max_article_length = 0
         max_option_length = 0
         for idx in data_batch:
             data = data_set[idx]
             max_article_length = max(max_article_length, data.article.size(0))
-            for ops in data.options:
+            for ops in data.ops:
                 for op in ops:
                     max_option_length = max(max_option_length, op.size(0))
-        cnt = 0        
-        for idx in data_batch:
+                    
+        for i, idx in enumerate(data_batch):
             data = data_set[idx]
             padding = torch.zeros(max_article_length - data.article.size(0))
             article = torch.cat([data.article, padding], 0)
@@ -155,32 +158,33 @@ class Loader(object):
             mask[:data.article.size(0)] = 1
             articles.append(article)
             articles_mask.append(mask)
-            for ops in data.options:
+            for ops in data.ops:
                 o = []
                 m = []
                 for op in ops:
                     padding = torch.zeros(max_option_length - op.size(0))
                     o.append(torch.cat([op, padding], 0))
                     mask = torch.zeros(max_option_length)
-                    mask[:ops.size(0)] = 1
+                    mask[:op.size(0)] = 1
                     m.append(mask)
                 o = torch.stack(o, 0)
                 m = torch.stack(m, 0)
                 options.append(o)
                 options_mask.append(m)
-                question_ids.append(cnt)
-                cnt += 1
-            for ans in data.answers:
+                question_id.append(i)
+            for ans in data.ans:
                 answers.append(ans)
-                
-        articles = torch.stack(articles) #bsz X alen
+            for pos in data.ph:
+                question_pos.append(pos + i * max_article_length)
+        articles = torch.stack(articles).long() #bsz X alen
         articles_mask = torch.stack(articles_mask)
-        options = torch.stack(options) #opnum X 4 X oplen
+        options = torch.stack(options).long() #opnum X 4 X oplen
         options_mask = torch.stack(options_mask)
-        questions_ids = torch.LongTensor(questions_ids) #opnum
+        question_id = torch.LongTensor(question_id) #opnum
+        question_pos = torch.LongTensor(question_pos) #opnum
         answers = torch.LongTensor(answers) #opnum
         inp = [articles, articles_mask, options, options_mask,
-               questions_ids]
+               question_id, question_pos]
         tgt = answers
         return inp, tgt
                 
@@ -190,24 +194,23 @@ class Loader(object):
             random.shuffle(self.data)
         seqlen = torch.zeros(self.data_num)
         for i in range(self.data_num):
-            seqlen[i] = self.data[i].size(0)
+            seqlen[i] = self.data[i].article.size(0)
         cache_start = 0
         while (cache_start < self.data_num):
             cache_end = min(cache_start + self.cache_size, self.data_num)
             cache_data = self.data[cache_start:cache_end]
-            seql = seqlen[catch_start:cache_end]
-            indices = torch.argsort(seql, descending=True)
+            seql = seqlen[cache_start:cache_end]
+            _, indices = torch.sort(seql, descending=True)
             batch_start = cache_start
             while (batch_start < cache_end):
                 batch_end = min(batch_start + self.batch_size, cache_end)
                 data_batch = indices[batch_start:batch_end]
                 inp, tgt = self._batchify(cache_data, data_batch)
                 inp = to_device(inp, self.device)
-                tgt = to_device(tgt)
+                tgt = to_device(tgt, self.device)
                 yield inp, tgt
                 batch_start += self.batch_size
             cache_start += self.cache_size
-                
                 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='bert cloth')
@@ -221,8 +224,11 @@ if __name__ == '__main__':
         args.bert_model = 'bert-base-uncased'
         data = Preprocessor(args)
     '''
-    args.data_dir = './data/traain_3sents.pt'
+    args.data_dir = './data/test_3sents.pt'
     args.bert_model = 'bert-base-uncased'
+    args.cache_size = 512
+    args.batch_size = 32
     train_data = Loader(args)
     for inp, tgt in train_data.data_iter():
         break
+    #'''

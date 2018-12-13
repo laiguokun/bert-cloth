@@ -30,8 +30,10 @@ import shutil
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
+import sys
+sys.path.append('..')
 
-from .file_utils import cached_path
+from pytorch_pretrained_bert.file_utils import cached_path, PYTORCH_PRETRAINED_BERT_CACHE
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s', 
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -1031,3 +1033,72 @@ class BertForQuestionAnswering(PreTrainedBertModel):
             return total_loss
         else:
             return start_logits, end_logits
+
+class BertClothPredictionHead(nn.Module):
+    def __init__(self, config, bert_model_embedding_weights):
+        super(BertClothPredictionHead, self).__init__()
+        self.transform = BertPredictionHeadTransform(config)
+        self.embedding = nn.Embedding.from_pretrained(bert_model_embedding_weights, freeze = True)
+
+    def forward(self, hidden_states, ops, ops_mask):
+        '''
+        ops               opnum X 4 X olen
+        hidden_statas     opnum X h_dim
+        '''
+        ops = self.embedding(ops)
+        #mask averge pooling
+        ops_mask = ops_mask.unsqueeze(-1)
+        ops = ops * ops_mask
+        ops = ops.sum(2)
+        ops = ops/(ops_mask.sum(2))
+        
+        hidden_states = self.transform(hidden_states)
+        hidden_states = hidden_states.unsqueeze(1)
+        hidden_states = torch.bmm(hidden_states, ops.transpose(1,2))
+        hidden_states = hidden_states.squeeze()
+        return hidden_states
+    
+class BertForCloth(PreTrainedBertModel):
+
+    def __init__(self, config):
+        super(BertForCloth, self).__init__(config)
+        self.bert = BertModel(config)
+        #self.cls = BertClothPredictionHead(config, self.bert.embeddings.word_embeddings.weight)
+        self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
+        self.apply(self.init_bert_weights)
+        self.loss = nn.CrossEntropyLoss()
+    
+    def accuracy(self, out, tgt):
+        out = torch.argmax(out, 1)
+        return torch.sum(out == tgt)
+        
+    def forward(self, inp, tgt):
+        articles, articles_mask, ops, ops_mask, question_id, question_pos = inp      
+        bsz, qlen = articles.size()    
+        out, _ = self.bert(articles, attention_mask = articles_mask,
+            output_all_encoded_layers=False)
+        out = out.view(bsz * qlen, -1)
+        out = out[question_pos]
+        prediction_scores = self.cls(out, ops, ops_mask)
+
+        loss = self.loss(prediction_scores, tgt)
+        acc = self.accuracy(prediction_scores, tgt)
+        return loss, acc
+    
+#from .file_utils import      
+if __name__ == '__main__':
+    bsz = 32
+    max_length = 50
+    max_olen = 3
+    articles = torch.zeros(bsz, max_length).long()
+    articles_mask = torch.ones(articles.size())
+    ops = torch.zeros(bsz, 4, max_olen).long()
+    ops_mask = torch.ones(ops.size())
+    question_id = torch.arange(bsz).long()
+    question_pos = torch.arange(bsz).long()
+    ans = torch.zeros(bsz).long()
+    inp = [articles, articles_mask, ops, ops_mask, question_id, question_pos]
+    tgt = ans
+    model = BertForCloth.from_pretrained('bert-base-uncased',
+          cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(-1))
+    loss, acc = model(inp, tgt)
