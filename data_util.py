@@ -58,7 +58,7 @@ class ClothSample(object):
         for i in range(len(self.ops)):
             for k in range(4):
                 self.ops[i][k] = tokenizer.convert_tokens_to_ids(self.ops[i][k])
-                self.ops[i][k] = torch.tensor(self.article)
+                self.ops[i][k] = torch.Tensor(self.ops[i][k])
         self.ph = torch.Tensor(self.ph)
         self.ans = torch.Tensor(self.ans)
                 
@@ -102,13 +102,15 @@ class Preprocessor(object):
             article = []
             for left in range(i-1, max(0, i - pre - 1), -1):
                 article += sents[left]
+            start = len(article)
             article += sents[i]
+            end = len(article)
             for right in range(i+1, min(i + post + 1, len(sents))):
                 article += sents[right]
             sample.article = article
             
-            for p in range(len(sents[i])):
-                if (sents[i][p] == '[MASK]'):
+            for p in range(start, end):
+                if (article[p] == '[MASK]'):
                     sample.ph.append(p)
                     ops = tokenize_ops(data['options'][cnt], self.tokenizer)
                     sample.ops.append(ops)
@@ -140,7 +142,6 @@ class Loader(object):
         answers = []
         question_id = []
         question_pos = []
-        
         max_article_length = 0
         max_option_length = 0
         for idx in data_batch:
@@ -161,7 +162,9 @@ class Loader(object):
             for ops in data.ops:
                 o = []
                 m = []
+                #print(len(ops))
                 for op in ops:
+                    #print(op)
                     padding = torch.zeros(max_option_length - op.size(0))
                     o.append(torch.cat([op, padding], 0))
                     mask = torch.zeros(max_option_length)
@@ -172,6 +175,7 @@ class Loader(object):
                 options.append(o)
                 options_mask.append(m)
                 question_id.append(i)
+                #input()
             for ans in data.ans:
                 answers.append(ans)
             for pos in data.ph:
@@ -201,9 +205,9 @@ class Loader(object):
             cache_data = self.data[cache_start:cache_end]
             seql = seqlen[cache_start:cache_end]
             _, indices = torch.sort(seql, descending=True)
-            batch_start = cache_start
-            while (batch_start < cache_end):
-                batch_end = min(batch_start + self.batch_size, cache_end)
+            batch_start = 0
+            while (batch_start + cache_start < cache_end):
+                batch_end = min(batch_start + self.batch_size, cache_end - cache_start)
                 data_batch = indices[batch_start:batch_end]
                 inp, tgt = self._batchify(cache_data, data_batch)
                 inp = to_device(inp, self.device)
@@ -224,11 +228,15 @@ if __name__ == '__main__':
         args.bert_model = 'bert-base-uncased'
         data = Preprocessor(args)
     '''
-    args.data_dir = './data/test_3sents.pt'
+    args.data_dir = './data/'
     args.bert_model = 'bert-base-uncased'
     args.cache_size = 512
     args.batch_size = 32
-    train_data = Loader(args)
+    train_data = Loader(args.data_dir, 'valid_3sents.pt', args.cache_size, args.batch_size)
+    cnt = 0
     for inp, tgt in train_data.data_iter():
-        break
+        articles, articles_mask, options, options_mask, question_id, question_pos = inp
+        articles = articles.view(-1, )
+        print(articles[question_pos])
+        input()
     #'''

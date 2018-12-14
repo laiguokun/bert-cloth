@@ -263,10 +263,13 @@ def main():
                 tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
 
             eval_loss += tmp_eval_loss.mean().item()
-            eval_accuracy += tmp_eval_accuracy
+            eval_accuracy += float(tmp_eval_accuracy.sum().item())
 
             nb_eval_examples += tgt.size(0)
             nb_eval_steps += 1
+            if (nb_eval_steps % 10 == 0):
+                logger.info('step: {} | eval loss: {} | eval acc {}'.format(
+                    nb_eval_steps, eval_loss/nb_eval_examples, eval_accuracy/nb_eval_examples))          
 
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples

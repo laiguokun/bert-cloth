@@ -1067,9 +1067,13 @@ class BertForCloth(PreTrainedBertModel):
         self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
         self.apply(self.init_bert_weights)
         self.loss = nn.CrossEntropyLoss()
+        self.vocab_size = self.bert.embeddings.word_embeddings.weight.size(0)
     
     def accuracy(self, out, tgt):
         out = torch.argmax(out, 1)
+        #print(out)
+        #print(tgt)
+        #input()
         return torch.sum(out == tgt)
         
     def forward(self, inp, tgt):
@@ -1078,11 +1082,24 @@ class BertForCloth(PreTrainedBertModel):
         out, _ = self.bert(articles, attention_mask = articles_mask,
             output_all_encoded_layers=False)
         out = out.view(bsz * qlen, -1)
+        #print(question_pos)
         out = out[question_pos]
-        prediction_scores = self.cls(out, ops, ops_mask)
-
-        loss = self.loss(prediction_scores, tgt)
-        acc = self.accuracy(prediction_scores, tgt)
+        out = self.cls(out)
+        #convert ops to one hot
+        ops_one_hot = torch.eye(self.vocab_size).to(ops.device)
+        #print(ops[0])
+        ops_one_hot = ops_one_hot[ops]
+        out = out.unsqueeze(1).unsqueeze(2)
+        out = out * ops_one_hot
+        out = out.sum(-1)
+        #mask average pooling
+        out = out * ops_mask
+        out = out.sum(2)
+        out = out/(ops_mask.sum(2))
+        #print(out[0])
+        #input()
+        loss = self.loss(out, tgt)
+        acc = self.accuracy(out, tgt)
         return loss, acc
     
 #from .file_utils import      
