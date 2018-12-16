@@ -59,7 +59,7 @@ def main():
                         action='store_true',
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--train_batch_size",
-                        default=32,
+                        default=4,
                         type=int,
                         help="Total batch size for training.")
     parser.add_argument("--cache_size",
@@ -79,7 +79,7 @@ def main():
                         type=float,
                         help="Total number of training epochs to perform.")
     parser.add_argument("--num_log_steps",
-                        default=100,
+                        default=10,
                         type=int,
                         help="Total number of training epochs to perform.")
     parser.add_argument("--warmup_proportion",
@@ -117,7 +117,7 @@ def main():
 
     args = parser.parse_args()
 
-
+    data_file = {'train':'train.pt',  'valid':'valid.pt', 'test':'test.pt'}
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         n_gpu = torch.cuda.device_count()
@@ -158,7 +158,7 @@ def main():
     num_train_steps = None
     train_data = None
     if args.do_train:
-        train_data = data_util.Loader(args.data_dir, 'train_3sents.pt', args.cache_size, args.train_batch_size, device)
+        train_data = data_util.Loader(args.data_dir, data_file['train'], args.cache_size, args.train_batch_size, device)
         num_train_steps = int(
             train_data.data_num / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
 
@@ -220,7 +220,8 @@ def main():
                 loss.backward()
                 tr_loss += loss.item()
                 tr_acc += acc.item()
-                nb_tr_examples += tgt.size(0)
+                #print(tr_acc)
+                nb_tr_examples += inp[-1].sum()
                 nb_tr_steps += 1
                 if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16 or args.optimize_on_cpu:
@@ -243,15 +244,15 @@ def main():
                     global_step += 1
                 if (global_step % args.num_log_steps == 0):
                     logger.info('step: {} | train loss: {} | train acc {}'.format(
-                        global_step, tr_loss/nb_tr_examples, tr_acc/nb_tr_example))
+                        global_step, tr_loss/nb_tr_examples, tr_acc/nb_tr_examples))
                     tr_loss = 0
                     tr_acc = 0
-                    nb_tr_example = 0
+                    nb_tr_examples = 0
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        valid_data = data_util.Loader(args.data_dir, 'valid_3sents.pt', args.cache_size, args.eval_batch_size, device)
         logger.info("***** Running evaluation *****")
         logger.info("  Batch size = %d", args.eval_batch_size)
+        valid_data = data_util.Loader(args.data_dir, data_file['valid'], args.cache_size, args.eval_batch_size, device)
         # Run prediction for full data
 
         model.eval()
@@ -262,22 +263,21 @@ def main():
             with torch.no_grad():
                 tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
 
-            eval_loss += tmp_eval_loss.mean().item()
-            eval_accuracy += float(tmp_eval_accuracy.sum().item())
+            eval_loss += tmp_eval_loss.item()
+            eval_accuracy += tmp_eval_accuracy.item()
 
-            nb_eval_examples += tgt.size(0)
+            nb_eval_examples += inp[-1].sum().item()
             nb_eval_steps += 1
-            if (nb_eval_steps % 10 == 0):
+            if (nb_eval_steps % 100 == 0):
                 logger.info('step: {} | eval loss: {} | eval acc {}'.format(
-                    nb_eval_steps, eval_loss/nb_eval_examples, eval_accuracy/nb_eval_examples))          
+                    nb_eval_steps, eval_loss/nb_eval_steps, eval_accuracy/nb_eval_examples))          
 
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
 
         result = {'valid_eval_loss': eval_loss,
                   'valid_eval_accuracy': eval_accuracy,
-                  'global_step': global_step,
-                  'loss': tr_loss/nb_tr_steps}
+                  'global_step': global_step}
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, "w") as writer:
@@ -287,7 +287,7 @@ def main():
                 writer.write("%s = %s\n" % (key, str(result[key])))
                 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        test_data = data_util.Loader(args.data_dir, 'test_3sents.pt', args.cache_size, args.eval_batch_size, device)
+        test_data = data_util.Loader(args.data_dir, data_file['test'], args.cache_size, args.eval_batch_size, device)
         logger.info("***** Running test evaluation *****")
         logger.info("  Batch size = %d", args.eval_batch_size)
         # Run prediction for full data
@@ -300,10 +300,10 @@ def main():
             with torch.no_grad():
                 tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
 
-            eval_loss += tmp_eval_loss.mean().item()
-            eval_accuracy += tmp_eval_accuracy
+            eval_loss += tmp_eval_loss.item()
+            eval_accuracy += tmp_eval_accuracy.item()
 
-            nb_eval_examples += tgt.size(0)
+            nb_eval_examples += inp[-1].sum().item()
             nb_eval_steps += 1
 
         eval_loss = eval_loss / nb_eval_steps
@@ -311,8 +311,7 @@ def main():
 
         result = {'test_eval_loss': eval_loss,
                   'test_eval_accuracy': eval_accuracy,
-                  'global_step': global_step,
-                  'loss': tr_loss/nb_tr_steps}
+                  'global_step': global_step}
 
         output_eval_file = os.path.join(args.output_dir, "test_results.txt")
         with open(output_eval_file, "w") as writer:

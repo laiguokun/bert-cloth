@@ -35,22 +35,11 @@ def to_device(L, device):
         return ret
 
 class ClothSample(object):
-    def __init__(self, data, tokenizer):
+    def __init__(self):
         self.article = None
         self.ph = []
         self.ops = []
         self.ans = []
-        if (data != None):
-            cnt = 0
-            self.article = tokenizer(self.article)
-            for p in range(len(self.article)):
-                if (self.article[p] == '_'):
-                    self.article[p] = '[MASK]'
-                    self.ph.append(p)
-                    ops = tokenize_ops(data['option'][cnt], self.tokenizer)
-                    self.ops.append(ops)
-                    self.ans.append(ord(data['answer'][cnt]) - ord('A'))
-                    cnt += 1
                     
     def convert_tokens_to_ids(self, tokenizer):
         self.article = tokenizer.convert_tokens_to_ids(self.article)
@@ -88,7 +77,7 @@ class Preprocessor(object):
     
     def _split_data(self, data, pre=1, post=1):
         if (pre + post == 0):
-            return [self._create_sample(self.data)]
+            return self._create_sample(data)
         ret = []
         sents = nltk.sent_tokenize(data['article'])
         for i in range(len(sents)):
@@ -98,7 +87,7 @@ class Preprocessor(object):
                     sents[i][p] = '[MASK]'
         cnt = 0
         for i in range(len(sents)):
-            sample = self._create_sample()
+            sample = ClothSample()
             article = []
             for left in range(i-1, max(0, i - pre - 1), -1):
                 article += sents[left]
@@ -120,8 +109,44 @@ class Preprocessor(object):
                 ret.append(sample)
         return ret
     
-    def _create_sample(self, data=None):
-        return ClothSample(data, self.tokenizer)
+    def _create_sample(self, data):
+        cnt = 0
+        article = self.tokenizer.tokenize(data['article'])
+        if (len(article) <= 512):
+            sample = ClothSample()
+            sample.article = article
+            for p in range(len(article)):
+                if (sample.article[p] == '_'):
+                    sample.article[p] = '[MASK]'
+                    sample.ph.append(p)
+                    ops = tokenize_ops(data['options'][cnt], self.tokenizer)
+                    sample.ops.append(ops)
+                    sample.ans.append(ord(data['answers'][cnt]) - ord('A'))
+                    cnt += 1
+            return [sample]
+        else:
+            first_sample = ClothSample()
+            second_sample = ClothSample()
+            second_s = len(article) - 512
+            for p in range(len(article)):
+                if (article[p] == '_'):
+                    article[p] = '[MASK]'
+                    ops = tokenize_ops(data['options'][cnt], self.tokenizer)
+                    if (p < 512):
+                        first_sample.ph.append(p)
+                        first_sample.ops.append(ops)
+                        first_sample.ans.append(ord(data['answers'][cnt]) - ord('A'))
+                    else:
+                        second_sample.ph.append(p - second_s)
+                        second_sample.ops.append(ops)
+                        second_sample.ans.append(ord(data['answers'][cnt]) - ord('A'))
+                    cnt += 1                    
+            first_sample.article = article[:512]
+            second_sample.article = article[-512:]
+            if (len(second_sample.ans) == 0):
+                return [first_sample]
+            else:
+                return [first_sample, second_sample]
 
 class Loader(object):
     def __init__(self, data_dir, data_file, cache_size, batch_size, device='cpu'):
@@ -135,60 +160,38 @@ class Loader(object):
         self.device = device
     
     def _batchify(self, data_set, data_batch):
-        articles = []
-        articles_mask = []
-        options = []
-        options_mask = []
-        answers = []
-        question_id = []
-        question_pos = []
         max_article_length = 0
         max_option_length = 0
+        max_ops_num = 0
+        bsz = len(data_batch)
         for idx in data_batch:
             data = data_set[idx]
             max_article_length = max(max_article_length, data.article.size(0))
             for ops in data.ops:
                 for op in ops:
                     max_option_length = max(max_option_length, op.size(0))
-                    
+            max_ops_num  = max(max_ops_num, len(data.ops))
+        articles = torch.zeros(bsz, max_article_length).long()
+        articles_mask = torch.ones(articles.size())
+        options = torch.zeros(bsz, max_ops_num, 4, max_option_length).long()
+        options_mask = torch.ones(options.size())
+        answers = torch.zeros(bsz, max_ops_num).long()
+        mask = torch.zeros(answers.size())
+        question_pos = torch.zeros(answers.size()).long()
         for i, idx in enumerate(data_batch):
             data = data_set[idx]
-            padding = torch.zeros(max_article_length - data.article.size(0))
-            article = torch.cat([data.article, padding], 0)
-            mask = torch.zeros(max_article_length)
-            mask[:data.article.size(0)] = 1
-            articles.append(article)
-            articles_mask.append(mask)
-            for ops in data.ops:
-                o = []
-                m = []
-                #print(len(ops))
-                for op in ops:
-                    #print(op)
-                    padding = torch.zeros(max_option_length - op.size(0))
-                    o.append(torch.cat([op, padding], 0))
-                    mask = torch.zeros(max_option_length)
-                    mask[:op.size(0)] = 1
-                    m.append(mask)
-                o = torch.stack(o, 0)
-                m = torch.stack(m, 0)
-                options.append(o)
-                options_mask.append(m)
-                question_id.append(i)
-                #input()
-            for ans in data.ans:
-                answers.append(ans)
-            for pos in data.ph:
-                question_pos.append(pos + i * max_article_length)
-        articles = torch.stack(articles).long() #bsz X alen
-        articles_mask = torch.stack(articles_mask)
-        options = torch.stack(options).long() #opnum X 4 X oplen
-        options_mask = torch.stack(options_mask)
-        question_id = torch.LongTensor(question_id) #opnum
-        question_pos = torch.LongTensor(question_pos) #opnum
-        answers = torch.LongTensor(answers) #opnum
-        inp = [articles, articles_mask, options, options_mask,
-               question_id, question_pos]
+            articles[i, :data.article.size(0)] = data.article
+            articles_mask[i, data.article.size(0):] = 0
+            for q, ops in enumerate(data.ops):
+                for k, op in enumerate(ops):
+                    options[i,q,k,:op.size(0)] = op
+                    options_mask[i,q,k, op.size(0):] = 0
+            for q, ans in enumerate(data.ans):
+                answers[i,q] = ans
+                mask[i,q] = 1
+            for q, pos in enumerate(data.ph):
+                question_pos[i,q] = pos
+        inp = [articles, articles_mask, options, options_mask, question_pos, mask]
         tgt = answers
         return inp, tgt
                 
@@ -219,24 +222,22 @@ class Loader(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='bert cloth')
     args = parser.parse_args()
-    '''
+    #'''
     data_collections = ['train', 'valid', 'test']
     for item in data_collections:    
         args.data_dir = './CLOTH/{}'.format(item)
-        args.pre = args.post = 1
-        args.save_name = './data/{}_3sents.pt'.format(item)
+        args.pre = args.post = 0
+        args.save_name = './data/{}.pt'.format(item)
         args.bert_model = 'bert-base-uncased'
         data = Preprocessor(args)
     '''
     args.data_dir = './data/'
     args.bert_model = 'bert-base-uncased'
-    args.cache_size = 512
-    args.batch_size = 32
-    train_data = Loader(args.data_dir, 'valid_3sents.pt', args.cache_size, args.batch_size)
+    args.cache_size = 32
+    args.batch_size = 2
+    train_data = Loader(args.data_dir, 'valid.pt', args.cache_size, args.batch_size)
     cnt = 0
     for inp, tgt in train_data.data_iter():
-        articles, articles_mask, options, options_mask, question_id, question_pos = inp
-        articles = articles.view(-1, )
-        print(articles[question_pos])
-        input()
-    #'''
+        articles, articles_mask, options, options_mask, question_pos = inp
+
+    '''

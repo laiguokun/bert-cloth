@@ -1066,42 +1066,67 @@ class BertForCloth(PreTrainedBertModel):
         #self.cls = BertClothPredictionHead(config, self.bert.embeddings.word_embeddings.weight)
         self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
         self.apply(self.init_bert_weights)
-        self.loss = nn.CrossEntropyLoss()
+        self.loss = nn.CrossEntropyLoss(reduction='none')
         self.vocab_size = self.bert.embeddings.word_embeddings.weight.size(0)
     
     def accuracy(self, out, tgt):
-        out = torch.argmax(out, 1)
         #print(out)
         #print(tgt)
         #input()
-        return torch.sum(out == tgt)
+        out = torch.argmax(out, -1)
+        return (out == tgt).float()
         
     def forward(self, inp, tgt):
-        articles, articles_mask, ops, ops_mask, question_id, question_pos = inp      
-        bsz, qlen = articles.size()    
+        '''
+        input: article -> bsz X alen, 
+        option -> bsz X opnum X 4 X olen
+        output: bsz X opnum 
+        '''
+        articles, articles_mask, ops, ops_mask, question_pos, mask = inp 
+        #print(articles.size())
+        #print(ops.size())
+        #print(question_pos.size())
+        
+        bsz = ops.size(0)
+        opnum = ops.size(1)   
         out, _ = self.bert(articles, attention_mask = articles_mask,
             output_all_encoded_layers=False)
-        out = out.view(bsz * qlen, -1)
-        #print(question_pos)
-        out = out[question_pos]
+        question_pos = question_pos.unsqueeze(-1)
+        question_pos = question_pos.expand(bsz, opnum, out.size(-1))
+        #print(question_pos.size())
+        #print(out.size())
+        out = torch.gather(out, 1, question_pos)
+        #print(out.size())
+        #input()
         out = self.cls(out)
         #convert ops to one hot
-        ops_one_hot = torch.eye(self.vocab_size).to(ops.device)
-        #print(ops[0])
-        ops_one_hot = ops_one_hot[ops]
-        out = out.unsqueeze(1).unsqueeze(2)
-        out = out * ops_one_hot
-        out = out.sum(-1)
+        out = out.view(bsz, opnum, 1, self.vocab_size)
+        out = out.expand(bsz, opnum, 4, self.vocab_size)
+        out = torch.gather(out, 3, ops)
         #mask average pooling
         out = out * ops_mask
-        out = out.sum(2)
-        out = out/(ops_mask.sum(2))
-        #print(out[0])
-        #input()
+        out = out.sum(-1)
+        out = out/(ops_mask.sum(-1))
+        
+        out = out.view(-1, 4)
+        tgt = tgt.view(-1,)
         loss = self.loss(out, tgt)
         acc = self.accuracy(out, tgt)
+        loss = loss.view(bsz, opnum)
+        acc = acc.view(bsz, opnum)
+        loss = loss * mask
+        acc = acc * mask
+        #print(loss)
+        #print(t)
+        #input()
+
+        loss = loss.sum()/(mask.sum())
+        acc = acc.sum()
         return loss, acc
-    
+                           
+    def init_zero_weight(self, shape):
+        weight = next(self.parameters())
+        return weight.new_zeros(shape)    
 #from .file_utils import      
 if __name__ == '__main__':
     bsz = 32
