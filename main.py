@@ -117,7 +117,9 @@ def main():
 
     args = parser.parse_args()
 
-    data_file = {'train':'train.pt',  'valid':'valid.pt', 'test':'test.pt'}
+    data_file = {'train':'train',  'valid':'valid', 'test':'test'}
+    for key in data_file.keys():
+        data_file[key] = data_file[key] + '-' + args.bert_model + '.pt'
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         n_gpu = torch.cuda.device_count()

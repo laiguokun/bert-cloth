@@ -227,8 +227,8 @@ if __name__ == '__main__':
     for item in data_collections:    
         args.data_dir = './CLOTH/{}'.format(item)
         args.pre = args.post = 0
-        args.save_name = './data/{}.pt'.format(item)
-        args.bert_model = 'bert-base-uncased'
+        args.bert_model = 'bert-large-uncased'
+        args.save_name = './data/{}-{}.pt'.format(item, args.bert_model)
         data = Preprocessor(args)
     '''
     args.data_dir = './data/'
