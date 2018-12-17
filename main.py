@@ -6,7 +6,6 @@ from __future__ import print_function
 
 import os
 import shutil
-import logging
 import argparse
 import random
 import data_util
@@ -17,12 +16,17 @@ import time
 from pytorch_pretrained_bert.modeling import BertForCloth
 from pytorch_pretrained_bert.optimization import BertAdam
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-import functools
 
-logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-                    datefmt = '%m/%d/%Y %H:%M:%S',
-                    level = logging.INFO)
-logger = logging.getLogger(__name__)
+def logging(s, log_path, print_=True, log_=True):
+    if print_:
+        print(s)
+    if log_:
+        with open(log_path, 'a+') as f_log:
+            f_log.write(s + '\n')
+
+def get_logger(log_path, **kwargs):
+    return functools.partial(logging, log_path=log_path, **kwargs)
+
 
 def accuracy(out, labels):
     outputs = np.argmax(out, axis=1)
@@ -116,7 +120,19 @@ def main():
                         help='Loss scaling, positive power of 2 values can improve fp16 convergence.')
 
     args = parser.parse_args()
-
+    
+    if not args.do_train and not args.do_eval:
+        raise ValueError("At least one of `do_train` or `do_eval` must be True.")
+        
+    suffix = time.strftime('%Y%m%d-%H%M%S')
+    args.output_dir = os.path.join(args.output_dir, suffix)
+    
+    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
+        raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    logging = get_logger(os.path.join(args.output_dir, 'log.txt'))
+    
     data_file = {'train':'train',  'valid':'valid', 'test':'test'}
     for key in data_file.keys():
         data_file[key] = data_file[key] + '-' + args.bert_model + '.pt'
@@ -129,9 +145,9 @@ def main():
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.distributed.init_process_group(backend='nccl')
         if args.fp16:
-            logger.info("16-bits training currently not supported in distributed training")
+            logging("16-bits training currently not supported in distributed training")
             args.fp16 = False # (see https://github.com/pytorch/pytorch/pull/13496)
-    logger.info("device %s n_gpu %d distributed training %r", device, n_gpu, bool(args.local_rank != -1))
+    logging("device %s n_gpu %d distributed training %r", device, n_gpu, bool(args.local_rank != -1))
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
@@ -144,16 +160,6 @@ def main():
     torch.manual_seed(args.seed)
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
-
-    if not args.do_train and not args.do_eval:
-        raise ValueError("At least one of `do_train` or `do_eval` must be True.")
-        
-    suffix = time.strftime('%Y%m%d-%H%M%S')
-    args.output_dir = os.path.join(args.output_dir, suffix)
-    
-    if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
-        raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-    os.makedirs(args.output_dir, exist_ok=True)
 
     task_name = args.task_name.lower()
 
@@ -200,9 +206,9 @@ def main():
 
     global_step = 0
     if args.do_train:
-        logger.info("***** Running training *****")
-        logger.info("  Batch size = %d", args.train_batch_size)
-        logger.info("  Num steps = %d", num_train_steps)
+        logging("***** Running training *****")
+        logging("  Batch size = %d", args.train_batch_size)
+        logging("  Num steps = %d", num_train_steps)
 
         model.train()
         for _ in range(int(args.num_train_epochs)):
@@ -235,7 +241,7 @@ def main():
                                     param.grad.data = param.grad.data / args.loss_scale
                         is_nan = set_optimizer_params_grad(param_optimizer, model.named_parameters(), test_nan=True)
                         if is_nan:
-                            logger.info("FP16 TRAINING: Nan in gradients, reducing loss scaling")
+                            logging("FP16 TRAINING: Nan in gradients, reducing loss scaling")
                             args.loss_scale = args.loss_scale / 2
                             model.zero_grad()
                             continue
@@ -246,15 +252,15 @@ def main():
                     model.zero_grad()
                     global_step += 1
                 if (global_step % args.num_log_steps == 0):
-                    logger.info('step: {} | train loss: {} | train acc {}'.format(
+                    logging('step: {} | train loss: {} | train acc {}'.format(
                         global_step, tr_loss/nb_tr_examples, tr_acc/nb_tr_examples))
                     tr_loss = 0
                     tr_acc = 0
                     nb_tr_examples = 0
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-        logger.info("***** Running evaluation *****")
-        logger.info("  Batch size = %d", args.eval_batch_size)
+        logging("***** Running evaluation *****")
+        logging("  Batch size = %d", args.eval_batch_size)
         valid_data = data_util.Loader(args.data_dir, data_file['valid'], args.cache_size, args.eval_batch_size, device)
         # Run prediction for full data
 
@@ -274,7 +280,7 @@ def main():
             nb_eval_examples += inp[-1].sum().item()
             nb_eval_steps += 1
             if (nb_eval_steps % 100 == 0):
-                logger.info('step: {} | eval loss: {} | eval acc {}'.format(
+                logging('step: {} | eval loss: {} | eval acc {}'.format(
                     nb_eval_steps, eval_loss/nb_eval_steps, eval_accuracy/nb_eval_examples))          
 
         eval_loss = eval_loss / nb_eval_steps
@@ -286,15 +292,15 @@ def main():
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, "w") as writer:
-            logger.info("***** Valid Eval results *****")
+            logging("***** Valid Eval results *****")
             for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
+                logging("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
                 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         test_data = data_util.Loader(args.data_dir, data_file['test'], args.cache_size, args.eval_batch_size, device)
-        logger.info("***** Running test evaluation *****")
-        logger.info("  Batch size = %d", args.eval_batch_size)
+        logging("***** Running test evaluation *****")
+        logging("  Batch size = %d", args.eval_batch_size)
         # Run prediction for full data
 
         model.eval()
@@ -324,9 +330,9 @@ def main():
 
         output_eval_file = os.path.join(args.output_dir, "test_results.txt")
         with open(output_eval_file, "w") as writer:
-            logger.info("***** Test Eval results *****")
+            logging("***** Test Eval results *****")
             for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
+                logging("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 if __name__ == "__main__":
     main()
