@@ -213,6 +213,7 @@ def main():
                 loss, acc = model(inp, tgt)
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
+                    acc = acc.sum()
                 if args.fp16 and args.loss_scale != 1.0:
                     # rescale loss for fp16 training
                     # see https://docs.nvidia.com/deeplearning/sdk/mixed-precision-training/index.html
@@ -264,7 +265,9 @@ def main():
 
             with torch.no_grad():
                 tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
-
+            if n_gpu > 1:
+                tmp_eval_loss = tmp_eval_loss.mean() # mean() to average on multi-gpu.
+                tmp_eval_accuracy = tmp_eval_accuracy.sum()
             eval_loss += tmp_eval_loss.item()
             eval_accuracy += tmp_eval_accuracy.item()
 
@@ -301,7 +304,11 @@ def main():
 
             with torch.no_grad():
                 tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
-
+                
+            if n_gpu > 1:
+                tmp_eval_loss = tmp_eval_loss.mean() # mean() to average on multi-gpu.
+                tmp_eval_accuracy = tmp_eval_accuracy.sum()
+                
             eval_loss += tmp_eval_loss.item()
             eval_accuracy += tmp_eval_accuracy.item()
 
