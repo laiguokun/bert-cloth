@@ -16,7 +16,7 @@ import time
 from pytorch_pretrained_bert.modeling import BertForCloth
 from pytorch_pretrained_bert.optimization import BertAdam
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-
+import functools
 def logging(s, log_path, print_=True, log_=True):
     if print_:
         print(s)
@@ -147,7 +147,7 @@ def main():
         if args.fp16:
             logging("16-bits training currently not supported in distributed training")
             args.fp16 = False # (see https://github.com/pytorch/pytorch/pull/13496)
-    logging("device %s n_gpu %d distributed training %r", device, n_gpu, bool(args.local_rank != -1))
+    logging("device {} n_gpu {} distributed training {}".format(device, n_gpu, bool(args.local_rank != -1)))
 
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
@@ -207,8 +207,8 @@ def main():
     global_step = 0
     if args.do_train:
         logging("***** Running training *****")
-        logging("  Batch size = %d", args.train_batch_size)
-        logging("  Num steps = %d", num_train_steps)
+        logging("  Batch size = {}".format(args.train_batch_size))
+        logging("  Num steps = {}".format(num_train_steps))
 
         model.train()
         for _ in range(int(args.num_train_epochs)):
@@ -260,7 +260,7 @@ def main():
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         logging("***** Running evaluation *****")
-        logging("  Batch size = %d", args.eval_batch_size)
+        logging("  Batch size = {}".format(args.eval_batch_size))
         valid_data = data_util.Loader(args.data_dir, data_file['valid'], args.cache_size, args.eval_batch_size, device)
         # Run prediction for full data
 
@@ -294,13 +294,13 @@ def main():
         with open(output_eval_file, "w") as writer:
             logging("***** Valid Eval results *****")
             for key in sorted(result.keys()):
-                logging("  %s = %s", key, str(result[key]))
+                logging("  {} = {}".format(key, str(result[key])))
                 writer.write("%s = %s\n" % (key, str(result[key])))
                 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         test_data = data_util.Loader(args.data_dir, data_file['test'], args.cache_size, args.eval_batch_size, device)
         logging("***** Running test evaluation *****")
-        logging("  Batch size = %d", args.eval_batch_size)
+        logging("  Batch size = {}".format(args.eval_batch_size))
         # Run prediction for full data
 
         model.eval()
@@ -332,7 +332,7 @@ def main():
         with open(output_eval_file, "w") as writer:
             logging("***** Test Eval results *****")
             for key in sorted(result.keys()):
-                logging("  %s = %s", key, str(result[key]))
+                logging("  {} = {}".format(key, str(result[key])))
                 writer.write("%s = %s\n" % (key, str(result[key])))
 if __name__ == "__main__":
     main()
