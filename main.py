@@ -203,7 +203,7 @@ def main():
                          lr=args.learning_rate,
                          warmup=args.warmup_proportion,
                          t_total=t_total)
-
+    
     global_step = 0
     if args.do_train:
         logging("***** Running training *****")
@@ -216,7 +216,7 @@ def main():
             tr_acc = 0
             nb_tr_examples, nb_tr_steps = 0, 0
             for inp, tgt in train_data.data_iter():
-                loss, acc = model(inp, tgt)
+                loss, acc, _, _ = model(inp, tgt)
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
                     acc = acc.sum()
@@ -230,7 +230,7 @@ def main():
                 tr_loss += loss.item()
                 tr_acc += acc.item()
                 #print(tr_acc)
-                nb_tr_examples += inp[-1].sum()
+                nb_tr_examples += inp[-2].sum()
                 nb_tr_steps += 1
                 if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16 or args.optimize_on_cpu:
@@ -265,29 +265,31 @@ def main():
         # Run prediction for full data
 
         model.eval()
-        eval_loss, eval_accuracy = 0, 0
-        nb_eval_steps, nb_eval_examples = 0, 0
+        eval_loss, eval_accuracy, eval_h_acc, eval_m_acc = 0, 0, 0, 0
+        nb_eval_steps, nb_eval_examples, nb_eval_h_examples = 0, 0, 0
         for inp, tgt in valid_data.data_iter(shuffle=False):
 
             with torch.no_grad():
-                tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
+                tmp_eval_loss, tmp_eval_accuracy, tmp_h_acc, tmp_m_acc = model(inp, tgt)
             if n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean() # mean() to average on multi-gpu.
                 tmp_eval_accuracy = tmp_eval_accuracy.sum()
             eval_loss += tmp_eval_loss.item()
             eval_accuracy += tmp_eval_accuracy.item()
-
-            nb_eval_examples += inp[-1].sum().item()
-            nb_eval_steps += 1
-            if (nb_eval_steps % 100 == 0):
-                logging('step: {} | eval loss: {} | eval acc {}'.format(
-                    nb_eval_steps, eval_loss/nb_eval_steps, eval_accuracy/nb_eval_examples))          
+            eval_h_acc += tmp_h_acc.item()
+            eval_m_acc += tmp_m_acc.item()
+            nb_eval_examples += inp[-2].sum().item()
+            nb_eval_h_examples += (inp[-2].sum(-1) * inp[-1]).sum().item()
+            nb_eval_steps += 1         
 
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
-
+        eval_h_acc = eval_h_acc / nb_eval_h_examples
+        eval_m_acc = eval_m_acc / (nb_eval_examples - nb_eval_h_examples)
         result = {'valid_eval_loss': eval_loss,
                   'valid_eval_accuracy': eval_accuracy,
+                  'valid_h_acc':eval_h_acc,
+                  'valid_m_acc':eval_m_acc,
                   'global_step': global_step}
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
@@ -304,28 +306,31 @@ def main():
         # Run prediction for full data
 
         model.eval()
-        eval_loss, eval_accuracy = 0, 0
-        nb_eval_steps, nb_eval_examples = 0, 0
+        eval_loss, eval_accuracy, eval_h_acc, eval_m_acc = 0, 0, 0, 0
+        nb_eval_steps, nb_eval_examples, nb_eval_h_examples = 0, 0, 0
         for inp, tgt in test_data.data_iter(shuffle=False):
 
             with torch.no_grad():
-                tmp_eval_loss, tmp_eval_accuracy = model(inp, tgt)
-                
+                tmp_eval_loss, tmp_eval_accuracy, tmp_h_acc, tmp_m_acc = model(inp, tgt)
             if n_gpu > 1:
                 tmp_eval_loss = tmp_eval_loss.mean() # mean() to average on multi-gpu.
                 tmp_eval_accuracy = tmp_eval_accuracy.sum()
-                
             eval_loss += tmp_eval_loss.item()
             eval_accuracy += tmp_eval_accuracy.item()
-
-            nb_eval_examples += inp[-1].sum().item()
-            nb_eval_steps += 1
+            eval_h_acc += tmp_h_acc.item()
+            eval_m_acc += tmp_m_acc.item()
+            nb_eval_examples += inp[-2].sum().item()
+            nb_eval_h_examples += (inp[-2].sum(-1) * inp[-1]).sum().item()
+            nb_eval_steps += 1         
 
         eval_loss = eval_loss / nb_eval_steps
         eval_accuracy = eval_accuracy / nb_eval_examples
-
-        result = {'test_eval_loss': eval_loss,
-                  'test_eval_accuracy': eval_accuracy,
+        eval_h_acc = eval_h_acc / nb_eval_h_examples
+        eval_m_acc = eval_m_acc / (nb_eval_examples - nb_eval_h_examples)
+        result = {'valid_eval_loss': eval_loss,
+                  'valid_eval_accuracy': eval_accuracy,
+                  'valid_h_acc':eval_h_acc,
+                  'valid_m_acc':eval_m_acc,
                   'global_step': global_step}
 
         output_eval_file = os.path.join(args.output_dir, "test_results.txt")

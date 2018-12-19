@@ -40,6 +40,7 @@ class ClothSample(object):
         self.ph = []
         self.ops = []
         self.ans = []
+        self.high = 0
                     
     def convert_tokens_to_ids(self, tokenizer):
         self.article = tokenizer.convert_tokens_to_ids(self.article)
@@ -61,53 +62,26 @@ class Preprocessor(object):
         #max_article_len = 0
         for file_name in file_list:
             data = json.loads(open(file_name, 'r').read())
+            data['high'] = 0
+            if ('high' in file_name):
+                data['high'] = 1
             self.data.append(data)
             #max_article_len = max(max_article_len, len(nltk.word_tokenize(data['article'])))
-        self.data_split = []
+        self.data_objs = []
+        high_cnt = 0
+        middle_cnt = 0
         for sample in self.data:
-            self.data_split += self._split_data(sample, args.pre, args.post)
+            high_cnt += sample['high']
+            middle_cnt += (1 - sample['high'])
+            self.data_objs += self._create_sample(sample)
             #break
-        
-        for i in range(len(self.data_split)):
-            self.data_split[i].convert_tokens_to_ids(self.tokenizer)
+        print('high school sample:', high_cnt)
+        print('middle school sample:', middle_cnt)
+        for i in range(len(self.data_objs)):
+            self.data_objs[i].convert_tokens_to_ids(self.tokenizer)
             #break
-        torch.save(self.data_split, args.save_name)
+        torch.save(self.data_objs, args.save_name)
         
-        
-    
-    def _split_data(self, data, pre=1, post=1):
-        if (pre + post == 0):
-            return self._create_sample(data)
-        ret = []
-        sents = nltk.sent_tokenize(data['article'])
-        for i in range(len(sents)):
-            sents[i] = self.tokenizer.tokenize(sents[i])
-            for p in range(len(sents[i])):
-                if (sents[i][p] == '_'):
-                    sents[i][p] = '[MASK]'
-        cnt = 0
-        for i in range(len(sents)):
-            sample = ClothSample()
-            article = []
-            for left in range(i-1, max(0, i - pre - 1), -1):
-                article += sents[left]
-            start = len(article)
-            article += sents[i]
-            end = len(article)
-            for right in range(i+1, min(i + post + 1, len(sents))):
-                article += sents[right]
-            sample.article = article
-            
-            for p in range(start, end):
-                if (article[p] == '[MASK]'):
-                    sample.ph.append(p)
-                    ops = tokenize_ops(data['options'][cnt], self.tokenizer)
-                    sample.ops.append(ops)
-                    sample.ans.append(ord(data['answers'][cnt]) - ord('A'))
-                    cnt += 1
-            if (len(sample.ph) > 0):
-                ret.append(sample)
-        return ret
     
     def _create_sample(self, data):
         cnt = 0
@@ -115,6 +89,7 @@ class Preprocessor(object):
         if (len(article) <= 512):
             sample = ClothSample()
             sample.article = article
+            sample.high = data['high']
             for p in range(len(article)):
                 if (sample.article[p] == '_'):
                     sample.article[p] = '[MASK]'
@@ -127,6 +102,8 @@ class Preprocessor(object):
         else:
             first_sample = ClothSample()
             second_sample = ClothSample()
+            first_sample.high = data['high']
+            second_sample.high = data['high']
             second_s = len(article) - 512
             for p in range(len(article)):
                 if (article[p] == '_'):
@@ -178,6 +155,7 @@ class Loader(object):
         answers = torch.zeros(bsz, max_ops_num).long()
         mask = torch.zeros(answers.size())
         question_pos = torch.zeros(answers.size()).long()
+        high_mask = torch.zeros(bsz) #indicate the sample belong to high school set
         for i, idx in enumerate(data_batch):
             data = data_set[idx]
             articles[i, :data.article.size(0)] = data.article
@@ -191,7 +169,8 @@ class Loader(object):
                 mask[i,q] = 1
             for q, pos in enumerate(data.ph):
                 question_pos[i,q] = pos
-        inp = [articles, articles_mask, options, options_mask, question_pos, mask]
+            high_mask[i] = data.high
+        inp = [articles, articles_mask, options, options_mask, question_pos, mask, high_mask]
         tgt = answers
         return inp, tgt
                 
@@ -227,7 +206,7 @@ if __name__ == '__main__':
     for item in data_collections:    
         args.data_dir = './CLOTH/{}'.format(item)
         args.pre = args.post = 0
-        args.bert_model = 'bert-large-uncased'
+        args.bert_model = 'bert-base-uncased'
         args.save_name = './data/{}-{}.pt'.format(item, args.bert_model)
         data = Preprocessor(args)
     '''

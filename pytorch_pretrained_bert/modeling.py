@@ -1033,46 +1033,18 @@ class BertForQuestionAnswering(PreTrainedBertModel):
             return total_loss
         else:
             return start_logits, end_logits
-
-class BertClothPredictionHead(nn.Module):
-    def __init__(self, config, bert_model_embedding_weights):
-        super(BertClothPredictionHead, self).__init__()
-        self.transform = BertPredictionHeadTransform(config)
-        self.embedding = nn.Embedding.from_pretrained(bert_model_embedding_weights, freeze = True)
-
-    def forward(self, hidden_states, ops, ops_mask):
-        '''
-        ops               opnum X 4 X olen
-        hidden_statas     opnum X h_dim
-        '''
-        ops = self.embedding(ops)
-        #mask averge pooling
-        ops_mask = ops_mask.unsqueeze(-1)
-        ops = ops * ops_mask
-        ops = ops.sum(2)
-        ops = ops/(ops_mask.sum(2))
-        
-        hidden_states = self.transform(hidden_states)
-        hidden_states = hidden_states.unsqueeze(1)
-        hidden_states = torch.bmm(hidden_states, ops.transpose(1,2))
-        hidden_states = hidden_states.squeeze()
-        return hidden_states
     
 class BertForCloth(PreTrainedBertModel):
 
     def __init__(self, config):
         super(BertForCloth, self).__init__(config)
         self.bert = BertModel(config)
-        #self.cls = BertClothPredictionHead(config, self.bert.embeddings.word_embeddings.weight)
         self.cls = BertOnlyMLMHead(config, self.bert.embeddings.word_embeddings.weight)
         self.apply(self.init_bert_weights)
         self.loss = nn.CrossEntropyLoss(reduction='none')
         self.vocab_size = self.bert.embeddings.word_embeddings.weight.size(0)
     
     def accuracy(self, out, tgt):
-        #print(out)
-        #print(tgt)
-        #input()
         out = torch.argmax(out, -1)
         return (out == tgt).float()
         
@@ -1082,10 +1054,7 @@ class BertForCloth(PreTrainedBertModel):
         option -> bsz X opnum X 4 X olen
         output: bsz X opnum 
         '''
-        articles, articles_mask, ops, ops_mask, question_pos, mask = inp 
-        #print(articles.size())
-        #print(ops.size())
-        #print(question_pos.size())
+        articles, articles_mask, ops, ops_mask, question_pos, mask, high_mask = inp 
         
         bsz = ops.size(0)
         opnum = ops.size(1)   
@@ -1093,11 +1062,7 @@ class BertForCloth(PreTrainedBertModel):
             output_all_encoded_layers=False)
         question_pos = question_pos.unsqueeze(-1)
         question_pos = question_pos.expand(bsz, opnum, out.size(-1))
-        #print(question_pos.size())
-        #print(out.size())
         out = torch.gather(out, 1, question_pos)
-        #print(out.size())
-        #input()
         out = self.cls(out)
         #convert ops to one hot
         out = out.view(bsz, opnum, 1, self.vocab_size)
@@ -1116,13 +1081,13 @@ class BertForCloth(PreTrainedBertModel):
         acc = acc.view(bsz, opnum)
         loss = loss * mask
         acc = acc * mask
-        #print(loss)
-        #print(t)
-        #input()
+        acc = acc.sum(-1)
+        acc_high = (acc * high_mask).sum()
+        acc = acc.sum()
+        acc_middle = acc - acc_high
 
         loss = loss.sum()/(mask.sum())
-        acc = acc.sum()
-        return loss, acc
+        return loss, acc, acc_high, acc_middle
                            
     def init_zero_weight(self, shape):
         weight = next(self.parameters())
